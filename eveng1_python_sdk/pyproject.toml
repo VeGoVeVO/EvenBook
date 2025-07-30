@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "eveng1-python-sdk"
+version = "0.1.0"
+description = ""
+authors = ["Walid <otsouli.f@stconsultores.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+bleak = "^1.0.1"
+rich = "^14.1.0"
+setuptools = "^80.9.0"
+pywin32 = "^311"
+requests = "^2.32.4"
+customtkinter = "^5.2.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
