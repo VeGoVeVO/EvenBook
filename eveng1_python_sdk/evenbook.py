@@ -245,6 +245,8 @@ class G1Reader:
         self.highlighted_text = ""
         self._chunks = []
         self._on_progress_callback = None
+        self._last_gesture_time = 0
+        self._gesture_debounce_delay = 0.5  # 500ms debounce
         
         # Set up event loop for async operations
         self.loop = None
@@ -322,6 +324,15 @@ class G1Reader:
             
             self.logger.info(f"Gesture detected: {interaction_name} ({label}) from {side} side")
             
+            # Debounce gestures to prevent rapid-fire triggering
+            import time
+            current_time = time.time()
+            if current_time - self._last_gesture_time < self._gesture_debounce_delay:
+                self.logger.info(f"Gesture debounced - too soon after last gesture ({current_time - self._last_gesture_time:.3f}s)")
+                return
+            
+            self._last_gesture_time = current_time
+            
             # Handle double tap from RIGHT glass for play/pause
             if interaction_name == "DOUBLE_TAP" and side == "right":
                 await self._handle_play_pause()
@@ -340,12 +351,16 @@ class G1Reader:
     async def _handle_play_pause(self):
         """Handle double tap RIGHT gesture for reading control (play/pause)"""
         if not self.current_session:
+            self.logger.warning("_handle_play_pause called but no current_session")
             return
             
         session = self.current_session
         
+        self.logger.info(f"_handle_play_pause called - current state: {session.reading_state}, is_paused: {session.is_paused}")
+        
         if session.reading_state == "waiting":
             # First tap - start countdown
+            self.logger.info("Starting countdown from waiting state")
             await self._start_countdown()
         elif session.reading_state == "countdown":
             # Ignore gestures during countdown
@@ -353,15 +368,19 @@ class G1Reader:
             return
         elif session.reading_state == "reading":
             # Pause reading
+            self.logger.info("Pausing reading - was in 'reading' state")
             session.reading_state = "paused"
             session.is_paused = True
             await self._update_display("PAUSED\n\nDouble tap RIGHT to resume")
-            self.logger.info("Reading paused by double tap RIGHT")
+            self.logger.info(f"Reading paused by double tap RIGHT - state changed from 'reading' to 'paused'")
         elif session.reading_state == "paused":
             # Resume reading
+            self.logger.info("Resuming reading - was in 'paused' state")
             session.reading_state = "reading"
             session.is_paused = False
-            self.logger.info("Reading resumed by double tap RIGHT")
+            self.logger.info(f"Reading resumed by double tap RIGHT - state changed from 'paused' to 'reading'")
+        else:
+            self.logger.warning(f"Unexpected reading state in _handle_play_pause: {session.reading_state}")
     
     async def _start_countdown(self):
         """Start 3-second countdown before reading begins"""
@@ -376,8 +395,21 @@ class G1Reader:
             await asyncio.sleep(1)
         
         # Start reading
+        self.logger.info(f"Countdown completed - transitioning from 'countdown' to 'reading'")
         self.current_session.reading_state = "reading"
+        self.current_session.is_paused = False  # Ensure it's not paused
         self.current_session.start_time = time.time()
+        
+        self.logger.info(f"State after countdown: reading_state={self.current_session.reading_state}, is_paused={self.current_session.is_paused}")
+        
+        # Small delay to ensure any pending gestures are processed
+        await asyncio.sleep(0.2)
+        
+        # Double-check the state hasn't changed due to race condition
+        if self.current_session.reading_state != "reading":
+            self.logger.warning(f"State changed unexpectedly after countdown: {self.current_session.reading_state}")
+            self.current_session.reading_state = "reading"
+            self.current_session.is_paused = False
         
         # Begin the reading process
         if self.reading_task:
@@ -387,16 +419,22 @@ class G1Reader:
     async def _continue_reading(self):
         """Continue reading process with word-by-word highlighting"""
         if not self.current_session or not hasattr(self, '_chunks'):
+            self.logger.error("Cannot continue reading: missing session or chunks")
             return
             
         session = self.current_session
         chunks = self._chunks
         
+        self.logger.info(f"Starting _continue_reading - state: {session.reading_state}, is_paused: {session.is_paused}, is_reading: {self.is_reading}")
+        
         try:
             start_chunk = min(session.current_position, len(chunks) - 1)
             
             for i in range(start_chunk, len(chunks)):
+                self.logger.debug(f"Chunk {i}: reading_state={session.reading_state}, is_paused={session.is_paused}, is_reading={self.is_reading}")
+                
                 if not self.is_reading or session.reading_state != "reading":
+                    self.logger.info(f"Breaking from reading loop: is_reading={self.is_reading}, reading_state={session.reading_state}")
                     break
                 
                 # Wait if paused
@@ -404,6 +442,7 @@ class G1Reader:
                     await asyncio.sleep(0.1)
                 
                 if not self.is_reading or session.reading_state != "reading":
+                    self.logger.info(f"Breaking after pause check: is_reading={self.is_reading}, reading_state={session.reading_state}")
                     break
                 
                 # Process chunk with word-by-word highlighting
