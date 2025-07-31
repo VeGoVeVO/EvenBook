@@ -347,6 +347,10 @@ class G1Reader:
         if session.reading_state == "waiting":
             # First tap - start countdown
             await self._start_countdown()
+        elif session.reading_state == "countdown":
+            # Ignore gestures during countdown
+            self.logger.info("Gesture ignored during countdown")
+            return
         elif session.reading_state == "reading":
             # Pause reading
             session.reading_state = "paused"
